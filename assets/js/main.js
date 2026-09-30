@@ -64,6 +64,7 @@
 
     $('#articleCount').textContent = `（${list.length}）`;
     $('#statCount').textContent = state.manifest.articles.length;
+    $('#catCount').textContent = (state.manifest.categories || []).length;
 
     if (!list.length) {
       grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:60px 0;">该分类下暂无文章</div>';
