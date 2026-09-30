@@ -239,14 +239,14 @@
     }
 
     try {
-      const res = await fetch('articles.json', { cache: 'no-cache' });
+      const res = await fetch(`articles.json?v=${Date.now()}`, { cache: 'no-store' });
       state.manifest = await res.json();
       state.article = state.manifest.articles.find(a => a.slug === slug);
       if (!state.article) throw new Error('Article not found');
 
       renderCover();
 
-      const mdRes = await fetch(`articles/${slug}/${state.article.file}`, { cache: 'no-cache' });
+      const mdRes = await fetch(`articles/${slug}/${state.article.file}?v=${Date.now()}`, { cache: 'no-store' });
       if (!mdRes.ok) throw new Error('MD fetch failed');
       const md = await mdRes.text();
 

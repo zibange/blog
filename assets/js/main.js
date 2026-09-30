@@ -99,7 +99,7 @@
   async function init() {
     initTheme();
     try {
-      const res = await fetch('articles.json', { cache: 'no-cache' });
+      const res = await fetch(`articles.json?v=${Date.now()}`, { cache: 'no-store' });
       state.manifest = await res.json();
       document.title = `${state.manifest.site.title} — ${state.manifest.site.subtitle}`;
       renderFilters();
