@@ -114,6 +114,16 @@
       "file": "智能中控网关产品综述.md",
       "readTime": 26,
       "excerpt": "中控网关南向接入照明、暖通、门禁、能耗等各说各话的子系统和设备（Modbus、BACnet、KNX、Zigbee 等异构协议），北向以统一的 MQTT / HTTP / OPC UA 对接云平台，并在本地完成协议转换、边缘计算与断网自主联动。"
+    },
+    {
+      "slug": "network-video",
+      "title": "网络硬盘录像机（NVR）产品综述",
+      "category": "video",
+      "date": "2026-09-30",
+      "cover": "images/architecture.png",
+      "file": "NVR产品资料.md",
+      "readTime": 20,
+      "excerpt": "NVR 是视频监控系统的中心节点——接入所有 IPC、管好每一路录像、交给任何一个查看端，工程选型就是给项目定"吞吐与存储的大脑"。"
     }
   ]
 }
