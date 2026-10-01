@@ -385,6 +385,23 @@ body::before {
   color: var(--text-muted);
   margin-bottom: 8px;
 }
+.site-stats {
+  margin-top: 12px;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.site-stats .sep {
+  color: var(--border);
+}
+.site-stats span[id^="busuanzi_value"] {
+  color: var(--accent);
+  font-weight: 600;
+}
 
 /* ============================================================
    ARTICLE PAGE
