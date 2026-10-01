@@ -144,6 +144,16 @@
       "file": "LCD液晶拼接屏产品综述.md",
       "readTime": 28,
       "excerpt": "LCD 液晶拼接屏由多块工业级面板以极窄边拼接而成，配合拼接处理器实现整屏显示与任意开窗，是指挥中心、监控室与商业展示最常用的大屏方案。"
+    },
+    {
+      "slug": "led-indoor-display",
+      "title": "室内 LED 显示屏产品综述",
+      "category": "display",
+      "date": "2026-10-01",
+      "cover": "images/cover.png",
+      "file": "室内LED显示屏产品综述.md",
+      "readTime": 30,
+      "excerpt": "室内 LED 显示屏是以微小间距灯珠为像素单元的无缝拼接大屏，靠 R/G/B 三原色自发光实现高亮度与高对比度，是指挥中心与高端展示场景追求极致视觉效果的核心方案。"
     }
   ]
 }
