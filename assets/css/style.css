@@ -398,7 +398,8 @@ body::before {
 .site-stats .sep {
   color: var(--border);
 }
-.site-stats span[id^="busuanzi_value"] {
+.site-stats span[id^="busuanzi_site"],
+.site-stats span[id^="busuanzi_page"] {
   color: var(--accent);
   font-weight: 600;
 }
