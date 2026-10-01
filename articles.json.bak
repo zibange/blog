@@ -55,16 +55,7 @@
       "readTime": 25,
       "excerpt": "DTS 让整条光缆本身成为连续成千上万个温度像素的传感介质——长距离、全程无源、抗电磁干扰，把温度从点测变成线测。"
     },
-    {
-      "slug": "smart-gateway",
-      "title": "智能中控网关产品综述",
-      "category": "building",
-      "date": "2026-09-18",
-      "cover": "images/cover.png",
-      "file": "智能中控网关产品综述.md",
-      "readTime": 23,
-      "excerpt": "智能中控网关是部署在楼宇 / 园区弱电间里的一进一出枢纽：南向接入各说各话的子系统，北向以统一协议对接云平台，本地完成协议转换与断网联动。"
-    },
+    
     {
       "slug": "barrier-gate",
       "title": "道闸系统技术分析",
