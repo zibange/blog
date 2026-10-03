@@ -1,17 +1,15 @@
 /* =============================================================
- * 硬见 · 站内文档答疑（无 AI 纯检索版）
+ * 硬见 · 站内文档答疑（云端优先 + 本地兜底 · 服务端 RAG 版）
  *
  * 运行原理：
- *   1. 打开面板时才懒加载 corpus.json（由 ai-chatbot/build_corpus.py 从
- *      blog/articles/**\/*.md 生成），首屏零开销
- *   2. 浏览器内中文分词（Intl.Segmenter，退化 bigram）+ 倒排索引 + BM25 打分
- *   3. 取 top-K 原文片段作为"答案"，高亮命中词，附文章出处链接
- *
- * 特性：无 AI、无接口、无密钥、无后端；答案即站内文章原文摘录。
- * 外观：复用博客的 CSS 主题变量，跟随 data-theme 自动切换明暗。
+ *   1. 打开面板时优先请求「云端后端」/api/kb/search（腾讯轻量云），
+ *      由服务端做 BM25 检索；若配置了免费 LLM key，则升级为生成式 RAG。
+ *   2. 云端不可用（网络 / 混合内容 / CORS）时，自动降级为浏览器内
+ *      分词 + 倒排索引 + BM25 检索（原纯前端方案），保证离线也能用。
+ *   3. 答案即站内文章原文片段摘录，或 LLM 基于片段生成的回答 + 出处。
  *
  * 安全边界：纯新增文件，不修改博客任何既有 JS / JSON / 样式。
- * 后续接 AI 时只需替换 composeAnswer() 为"把片段喂给 LLM"，检索层完全复用。
+ * 前端零强依赖后端：后端下线也不影响博客与答疑功能（走本地兜底）。
  * ============================================================= */
 (function () {
   'use strict';
@@ -25,9 +23,17 @@
   var WEAK_SCORE = 2.0;   // 低于此分视为"没找到明确答案"
   var BM25 = { k1: 1.5, b: 0.75 };
 
-  /* ---------------- 中文分词 ----------------
-   * 索引与查询必须用同一个分词器，否则召回会错位。
-   */
+  // 云端后端候选地址（按顺序尝试：https 优先，失败依次回退 http / 直连 IP）
+  // 这样：线上 HTTPS 博客将来接上 HTTPS 后端即用；本地 HTTP 预览可走 http 验证；
+  // 全部失败则降级浏览器本地 BM25。
+  var USE_BACKEND = true;
+  var API_CANDIDATES = [
+    'https://api.hardwarewatch.de5.net',
+    'http://api.hardwarewatch.de5.net',
+    'http://101.42.4.134'
+  ];
+
+  /* ---------------- 中文分词 ---------------- */
   var SEG = (typeof Intl !== 'undefined' && Intl.Segmenter)
     ? new Intl.Segmenter('zh-CN', { granularity: 'word' })
     : null;
@@ -57,13 +63,13 @@
     return toks;
   }
 
-  /* ---------------- 索引与检索 ---------------- */
+  /* ---------------- 索引与检索（本地兜底用） ---------------- */
   var corpus = null, index = null, loading = false, loadFailed = false;
 
   function buildIndex(chunks) {
-    var df = new Map();   // 词 -> 出现在多少片段中
-    var tfList = [];      // 每个片段的词频表
-    var lens = [];        // 每个片段的词数
+    var df = new Map();
+    var tfList = [];
+    var lens = [];
     chunks.forEach(function (c) {
       var toks = tokenize(c.text + ' ' + c.article + ' ' + (c.section || ''));
       var tf = new Map();
@@ -81,7 +87,6 @@
     var raw = (query || '').trim().toLowerCase();
     var scores = new Array(corpus.chunks.length).fill(0);
 
-    // BM25
     qToks.forEach(function (t) {
       var df = index.df.get(t);
       if (!df) return;
@@ -95,7 +100,6 @@
       }
     });
 
-    // 加成：整句命中 > 标题命中 > 词命中标题
     corpus.chunks.forEach(function (c, i) {
       if (scores[i] <= 0) return;
       var text = c.text.toLowerCase();
@@ -154,7 +158,7 @@
     return html;
   }
 
-  /* ---------------- 组装答案 ---------------- */
+  /* ---------------- 组装本地答案（兜底用） ---------------- */
   function composeAnswer(query, hits) {
     if (!hits.length) {
       var cats = (corpus.articles || []).map(function (a) { return a.categoryName; }).filter(Boolean);
@@ -188,6 +192,81 @@
     return { html: html, weak: weak, related: related };
   }
 
+  /* ---------------- 云端后端检索（优先） ---------------- */
+  // 顺序尝试多个候选地址，命中即返回；全部失败返回 null（触发本地兜底）
+  function backendSearch(q) {
+    if (!USE_BACKEND) return Promise.resolve(null);
+    function tryOne(i) {
+      if (i >= API_CANDIDATES.length) return Promise.resolve(null);
+      var base = API_CANDIDATES[i];
+      var url = base + '/api/kb/search?q=' + encodeURIComponent(q) + '&top_k=' + TOP_K;
+      var ctrl = ('AbortController' in window) ? new AbortController() : null;
+      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 8000) : null;
+      var opts = { cache: 'no-store' };
+      if (ctrl) opts.signal = ctrl.signal;
+      return fetch(url, opts)
+        .then(function (r) {
+          if (timer) clearTimeout(timer);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          if (data && data.error) return null;   // 后端明确报错（如语料不可用），降级
+          return data;
+        })
+        .catch(function (e) {
+          if (timer) clearTimeout(timer);
+          console.warn('[qa-widget] 云端不可用(' + base + ')', e && e.message);
+          return tryOne(i + 1);
+        });
+    }
+    return tryOne(0);
+  }
+
+  // 把后端返回的命中片段渲染成与本地一致的结构
+  function renderHits(q, hits, weakOverride) {
+    if (!hits || !hits.length) {
+      addBot('抱歉，我在站内文章中没找到相关内容。可以换个说法试试。');
+      return;
+    }
+    var best = hits[0];
+    var weak = (typeof weakOverride === 'boolean') ? weakOverride : (best.score < WEAK_SCORE);
+    var link = best.url;
+    var snippet = highlight(makeSnippet(best.text || '', q), q);
+
+    var html = '';
+    if (weak) html += '<div class="hw-warn">没有找到明确答案，以下是最相近的内容：</div>';
+    html += '<div class="hw-atitle">' + escapeHtml(best.article) + '</div>';
+    if (best.section && best.section !== best.article) {
+      html += '<div class="hw-asection">' + escapeHtml(best.section) + '</div>';
+    }
+    html += '<div class="hw-atext">' + snippet + '</div>';
+    html += '<div class="hw-alink"><a href="' + link + '" target="_blank" rel="noopener">查看原文 →</a></div>';
+    addBot(html);
+    if (!weak && hits.length > 1) {
+      addRelated(hits.slice(1).map(function (h) {
+        return { title: h.article, section: h.section, url: h.url };
+      }));
+    }
+  }
+
+  function renderBackend(q, data) {
+    if (data.mode === 'rag' && data.answer) {
+      sub.textContent = '云端 AI 答疑 · 已生成答案';
+      var answerHtml = escapeHtml(data.answer).replace(/\n/g, '<br>');
+      addBot(answerHtml);
+      if (data.hits && data.hits.length) {
+        addRelated(data.hits.map(function (h) {
+          return { title: h.article, section: h.section, url: h.url };
+        }));
+      }
+      return;
+    }
+    // retrieval 模式（或未启用 LLM）：展示后端返回的片段
+    sub.textContent = '云端检索 · 已连接';
+    renderHits(q, data.hits, data.weak);
+  }
+
   /* ---------------- 样式（复用博客主题变量，自动明暗） ---------------- */
   var css = [
     '.hw-fab{position:fixed;right:24px;bottom:24px;width:52px;height:52px;border-radius:50%;',
@@ -195,7 +274,7 @@
     ' cursor:pointer;display:grid;place-items:center;z-index:100001;',
     ' box-shadow:0 12px 32px -8px rgba(0,0,0,.45);transition:transform .2s var(--ease,ease),opacity .2s;}',
     '.hw-fab:hover{transform:scale(1.07);}',
-    '.hw-fab.hw-lift{bottom:92px;}',                    /* 文章页有"回到顶部"按钮时上移避让 */
+    '.hw-fab.hw-lift{bottom:92px;}',
     '.hw-panel{position:fixed;right:24px;bottom:88px;width:382px;max-width:calc(100vw - 32px);',
     ' height:min(560px,calc(100vh - 130px));background:var(--bg-elevated,#16161a);',
     ' border:1px solid var(--border,#26262c);border-radius:16px;overflow:hidden;z-index:100002;',
@@ -266,13 +345,12 @@
   document.head.appendChild(styleEl);
 
   /* ---------------- DOM ---------------- */
-  var hasBackTop = !!document.querySelector('.back-top');   // 文章页专用的避让判断
+  var hasBackTop = !!document.querySelector('.back-top');
 
   var fab = document.createElement('button');
   fab.className = 'hw-fab' + (hasBackTop ? ' hw-lift' : '');
   fab.type = 'button';
   fab.setAttribute('aria-label', '打开站内答疑助手');
-  // 机器人图标：天线 + 圆角头部 + 侧翼 + 双眼 + 微笑嘴
   fab.innerHTML = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
     + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
     + '<path d="M12 3.4v2.1"/>'
@@ -293,7 +371,7 @@
     '<div class="hw-head">' +
       '<div>' +
         '<div class="hw-title">站内文档答疑</div>' +
-        '<div class="hw-sub" id="hwSub">基于本站文章检索 · 无 AI 生成</div>' +
+        '<div class="hw-sub" id="hwSub">云端检索优先 · 离线自动降级</div>' +
       '</div>' +
       '<button class="hw-close" type="button" aria-label="关闭">' +
         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>' +
@@ -314,7 +392,7 @@
   var chips = panel.querySelector('#hwChips');
   var sub = panel.querySelector('#hwSub');
 
-  /* ---------------- 数据加载（懒加载：首次打开面板才拉取） ---------------- */
+  /* ---------------- 数据加载（本地兜底语料，懒加载） ---------------- */
   function ensureCorpus() {
     if (corpus) return Promise.resolve(true);
     if (loading) return Promise.resolve(false);
@@ -398,16 +476,25 @@
     input.value = '';
     addUser(q);
 
-    ensureCorpus().then(function (ok) {
-      if (!ok) {
-        addBot('资料加载失败。请确认：<br>① 通过本地服务器访问（不要双击打开 HTML）；'
-             + '<br>② <code>assets/qa/corpus.json</code> 存在。');
+    backendSearch(q).then(function (data) {
+      // 后端返回了有效结果（不管是否有命中片段都走后端渲染）
+      if (data && data.hits) {
+        renderBackend(q, data);
         return;
       }
-      var hits = search(q);
-      var ans = composeAnswer(q, hits);
-      addBot(ans.html);
-      if (!ans.weak) addRelated(ans.related);
+      // 后端不可用 / 报错 → 降级本地 BM25
+      sub.textContent = '本地离线检索 · 云端暂不可达';
+      ensureCorpus().then(function (ok) {
+        if (!ok) {
+          addBot('资料加载失败。请确认：<br>① 通过本地服务器访问（不要双击打开 HTML）；'
+               + '<br>② <code>assets/qa/corpus.json</code> 存在。');
+          return;
+        }
+        var hits = search(q);
+        var ans = composeAnswer(q, hits);
+        addBot(ans.html);
+        if (!ans.weak) addRelated(ans.related);
+      });
     });
   }
 
@@ -417,7 +504,7 @@
   fab.addEventListener('click', function () {
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
-      ensureCorpus();
+      if (!corpus && !loadFailed) backendSearch(''); // 预热（可选，无副作用）
       setTimeout(function () { input.focus(); }, 60);
     }
   });
@@ -426,6 +513,6 @@
   });
 
   addBot('你好，我是<b>站内文档答疑</b>助手。<br>'
-       + '我会从本站文章里检索相关内容，把<b>原文片段</b>和出处给你 —— 不生成、不编造。<br>'
+       + '优先由<b>云端后端</b>检索本站文章并作答；云端不可用时自动切换为本地检索。<br>'
        + '点下方文章名，或直接输入问题试试。');
 })();
