@@ -6,13 +6,34 @@
     "description": "聚焦智能硬件与弱电安防产品，以工程选型与落地视角拆解系统架构、技术原理、核心参数与真实案例。"
   },
   "categories": [
-    { "id": "display", "name": "显控与显示" },
-    { "id": "perimeter", "name": "周界安防" },
-    { "id": "access", "name": "出入口控制" },
-    { "id": "fiber", "name": "光纤传感" },
-    { "id": "video", "name": "视频物联" },
-    { "id": "building", "name": "楼宇智能" },
-    { "id": "control", "name": "中央控制" }
+    {
+      "id": "display",
+      "name": "显控与显示"
+    },
+    {
+      "id": "perimeter",
+      "name": "周界安防"
+    },
+    {
+      "id": "access",
+      "name": "出入口控制"
+    },
+    {
+      "id": "fiber",
+      "name": "光纤传感"
+    },
+    {
+      "id": "video",
+      "name": "视频物联"
+    },
+    {
+      "id": "building",
+      "name": "楼宇智能"
+    },
+    {
+      "id": "control",
+      "name": "中央控制"
+    }
   ],
   "articles": [
     {
@@ -55,7 +76,6 @@
       "readTime": 25,
       "excerpt": "DTS 让整条光缆本身成为连续成千上万个温度像素的传感介质——长距离、全程无源、抗电磁干扰，把温度从点测变成线测。"
     },
-    
     {
       "slug": "barrier-gate",
       "title": "道闸系统技术分析",
@@ -146,7 +166,7 @@
       "readTime": 30,
       "excerpt": "室内 LED 显示屏是以微小间距灯珠为像素单元的无缝拼接大屏，靠 R/G/B 三原色自发光实现高亮度与高对比度，是指挥中心与高端展示场景追求极致视觉效果的核心方案。"
     },
-     {
+    {
       "slug": "fbg-sensor",
       "title": "光纤光栅传感器（FBG）产品综述",
       "category": "fiber",
@@ -195,6 +215,16 @@
       "file": "红外对射探测器产品综述.md",
       "readTime": 29,
       "excerpt": "红外对射用一对不可见的调制红外光束划出周界警戒线，遮断即报警。本文从四层架构、距离折减公式、人体遮挡模型到三个落地案例，拆解红外对射探测器的工程选型与实施要点。"
+    },
+    {
+      "slug": "tension-fence",
+      "title": "张力围栏产品综述：不带电的周界，靠一根钢索的拉力说话",
+      "category": "perimeter",
+      "date": "2026-10-03",
+      "cover": "images/cover.png",
+      "file": "张力围栏产品综述.md",
+      "readTime": 36,
+      "excerpt": "张力围栏把不锈钢索预紧到设定拉力，靠拉力变化判定攀爬、拉扯与剪断，前端无电无火花。本文从四层架构、GA/T 1032 参数核算、附属式与落地式安装几何到三个落地案例，拆解张力围栏的工程选型与实施要点。"
     }
   ]
 }
