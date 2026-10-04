@@ -38,6 +38,115 @@
     'http://101.42.4.134'               // 兜底：仅本地 HTTP 预览环境可用（HTTPS 页会被混合内容拦）
   ];
 
+  /* ---------------- 超时分级 + 云端熔断器（2026-10-04 P0） ----------------
+   * 背景（实测）：后端关机时，4 个候选「流式 9s×4 → 一次性 8s×4」串行硬等，
+   *   用户要 30~54s 才看到答案；且每条提问都重走一遍，等于降级功能白做。
+   * 三处优化：
+   *   1. 超时分级：主用 6s，备用 3.5s（原来是 9s/8s 一刀切）。
+   *   2. 网络级失败（超时 / Failed to fetch）直接跳本地，不再重复走一次性接口——
+   *      既然 TCP 连不上，流式与一次性必然同结果。
+   *   3. 熔断器：确认云端不可达后记忆状态，期间提问直接本地（零等待）；
+   *      冷却期结束自动后台探活，恢复后无感回到云端。
+   */
+  var TMO = { primary: 6000, backup: 3500, probe: 3000, budget: 9000, budgetSearch: 7000 };
+  var CB = {
+    KEY: 'hw_cb_v1',
+    FAILS_TO_TRIP: 1,       // 整条候选链走完仍失败即跳闸（已经试过所有地址了）
+    OPEN_BASE_MS: 60000,    // 首次冷却 60s
+    OPEN_MAX_MS: 600000,    // 冷却上限 10min（指数退避封顶）
+    state: 'closed',        // closed | open | half
+    fails: 0,
+    openUntil: 0,
+    coolMs: 60000,
+    probing: false
+  };
+  var cloudNetFail = false; // 最近一次云端尝试是否为「网络级不可达」
+
+  function isNetworkErr(e) {
+    if (!e) return false;
+    if (e.name === 'AbortError' || e.name === 'TypeError') return true;
+    return /network|fetch|timeout/i.test(e.message || '');
+  }
+
+  function cbSave() {
+    try {
+      sessionStorage.setItem(CB.KEY, JSON.stringify({
+        s: CB.state, f: CB.fails, u: CB.openUntil, c: CB.coolMs
+      }));
+    } catch (e) {}
+  }
+  function cbLoad() {
+    try {
+      var raw = sessionStorage.getItem(CB.KEY);
+      if (!raw) return;
+      var o = JSON.parse(raw);
+      if (o && o.s) {
+        CB.state = o.s; CB.fails = o.f || 0;
+        CB.openUntil = o.u || 0; CB.coolMs = o.c || CB.OPEN_BASE_MS;
+      }
+    } catch (e) {}
+  }
+  // 跳闸：断开 + 冷却期翻倍（避免后端真宕机时频繁探测）
+  function cbTrip() {
+    CB.state = 'open';
+    CB.openUntil = Date.now() + CB.coolMs;                  // 本次冷却用当前时长（首跳 60s）
+    CB.coolMs = Math.min(CB.coolMs * 2, CB.OPEN_MAX_MS);    // 下次翻倍，封顶 10min
+    CB.fails = 0;
+    cbSave();
+    var applied = Math.round((CB.openUntil - Date.now()) / 1000);
+    console.warn('[qa-widget] 云端不可达 → 熔断 ' + applied + 's（下次冷却 '
+                 + Math.round(CB.coolMs / 1000) + 's），期间直接走本地检索');
+  }
+  function cbReset() {
+    if (CB.state !== 'closed') console.warn('[qa-widget] 云端已恢复');
+    CB.state = 'closed'; CB.fails = 0; CB.openUntil = 0; CB.coolMs = CB.OPEN_BASE_MS;
+    cbSave();
+  }
+  function cbOnFail() {
+    CB.fails++;
+    if (CB.state === 'half' || CB.fails >= CB.FAILS_TO_TRIP) cbTrip();
+  }
+  // 本次提问是否允许走云端（open 冷却中 / half 探测中 → 否）
+  function cbAllowCloud() {
+    if (!USE_BACKEND) return false;
+    if (CB.state === 'closed') return true;
+    if (CB.state === 'open' && Date.now() >= CB.openUntil) {
+      CB.state = 'half'; cbSave();   // 冷却结束 → 半开，等后台探活结果
+    }
+    return false;
+  }
+  // 后台探活：只打 /api/health（不烧 token、不走 LLM），成功即闭合恢复云端
+  function cbProbe() {
+    if (CB.probing || !API_CANDIDATES.length) return;
+    CB.probing = true;
+    var ctrl = ('AbortController' in window) ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, TMO.probe);
+    var opts = { cache: 'no-store' };
+    if (ctrl) opts.signal = ctrl.signal;
+    fetch(API_CANDIDATES[0] + '/api/health', opts)
+      .then(function (r) {
+        clearTimeout(timer);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        if (d && (d.ok === true || d.status === 'ok' || d.kb)) cbReset();
+        else throw new Error('unexpected payload');
+      })
+      .catch(function (e) {
+        clearTimeout(timer);
+        console.warn('[qa-widget] 探活失败(' + API_CANDIDATES[0] + ')', e && e.message);
+        cbTrip();   // 探活失败 → 回到断开，冷却翻倍
+      })
+      .then(function () { CB.probing = false; });
+  }
+  // 冷却已过则后台探活（不阻塞本次回答）
+  function cbMaybeProbe() {
+    if (!USE_BACKEND) return;
+    if (CB.state === 'open' && Date.now() >= CB.openUntil) { CB.state = 'half'; cbSave(); }
+    if (CB.state === 'half') cbProbe();
+  }
+
   /* ---------------- 中文分词 ---------------- */
   var SEG = (typeof Intl !== 'undefined' && Intl.Segmenter)
     ? new Intl.Segmenter('zh-CN', { granularity: 'word' })
@@ -201,12 +310,16 @@
   // 顺序尝试多个候选地址，命中即返回；全部失败返回 null（触发本地兜底）
   function backendSearch(q) {
     if (!USE_BACKEND) return Promise.resolve(null);
+    var netFail = false;
+    var deadline = Date.now() + TMO.budgetSearch;
     function tryOne(i) {
       if (i >= API_CANDIDATES.length) return Promise.resolve(null);
+      if (i > 0 && Date.now() + 800 >= deadline) return Promise.resolve(null);
       var base = API_CANDIDATES[i];
       var url = base + '/api/kb/search?q=' + encodeURIComponent(q) + '&top_k=' + TOP_K;
       var ctrl = ('AbortController' in window) ? new AbortController() : null;
-      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 8000) : null;
+      var timeout = (i === 0) ? TMO.primary : Math.min(TMO.backup, Math.max(1200, deadline - Date.now()));
+      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, timeout) : null;
       var opts = { cache: 'no-store' };
       if (ctrl) opts.signal = ctrl.signal;
       return fetch(url, opts)
@@ -221,11 +334,12 @@
         })
         .catch(function (e) {
           if (timer) clearTimeout(timer);
+          if (isNetworkErr(e)) netFail = true;
           console.warn('[qa-widget] 云端不可用(' + base + ')', e && e.message);
           return tryOne(i + 1);
         });
     }
-    return tryOne(0);
+    return tryOne(0).then(function (d) { cloudNetFail = netFail; return d; });
   }
 
   // 把后端返回的命中片段渲染成与本地一致的结构
@@ -314,12 +428,17 @@
 
   // 返回 'ok' | 'rate_limited' | 'fail'
   function streamAsk(q) {
+    var netFail = false;
+    var deadline = Date.now() + TMO.budget;   // 整条链的总时间预算
     function tryOne(i) {
       if (i >= API_CANDIDATES.length) return Promise.resolve('fail');
+      // 预算耗尽就不再试：剩下的候选与已失败的往往是同一台服务器，等下去只是干耗
+      if (i > 0 && Date.now() + 800 >= deadline) return Promise.resolve('fail');
       var base = API_CANDIDATES[i];
       var url = base + '/api/kb/stream?q=' + encodeURIComponent(q) + '&top_k=' + TOP_K;
       var ctrl = new AbortController();
-      var timer = setTimeout(function () { ctrl.abort(); }, 9000);
+      var timeout = (i === 0) ? TMO.primary : Math.min(TMO.backup, Math.max(1200, deadline - Date.now()));
+      var timer = setTimeout(function () { ctrl.abort(); }, timeout);
 
       var bubble = null, acc = '', meta = null, doneInfo = null, gotDelta = false, closed = false;
 
@@ -391,11 +510,16 @@
       }).catch(function (e) {
         clearTimeout(timer);
         if (e && e.rateLimited) return 'rate_limited';
+        if (isNetworkErr(e)) netFail = true;
         console.warn('[qa-widget] 流式不可用(' + base + ')', e && e.message);
         return tryOne(i + 1);
       });
     }
-    return tryOne(0);
+    return tryOne(0).then(function (st) {
+      cloudNetFail = netFail;
+      if (st !== 'fail') return st;
+      return netFail ? 'fail_network' : 'fail_app';
+    });
   }
 
   /* ---------------- 样式（复用博客主题变量，自动明暗） ---------------- */
@@ -615,6 +739,8 @@
       }
       var hits = search(q);
       var ans = composeAnswer(q, hits);
+      // ensureCorpus() 会把副标题改成「已索引 N 篇」，这里补回离线状态说明（P1）
+      sub.textContent = '本地离线检索 · 已索引 ' + corpus.articles.length + ' 篇';
       addBot(ans.html);
       if (!ans.weak) addRelated(ans.related);
     });
@@ -624,9 +750,11 @@
     backendSearch(q).then(function (data) {
       // 后端返回了有效结果（不管是否有命中片段都走后端渲染）
       if (data && data.hits) {
+        cbReset();
         renderBackend(q, data);
         return;
       }
+      if (cloudNetFail) cbOnFail();
       localAnswer(q);
     });
   }
@@ -637,15 +765,24 @@
     input.value = '';
     addUser(q);
 
+    // 熔断器断开期间：直接走本地，用户零等待；冷却结束后后台探活，恢复自动生效
+    if (!cbAllowCloud()) {
+      localAnswer(q);
+      cbMaybeProbe();
+      return;
+    }
+
     if (USE_STREAM && supportsStream()) {
       sub.textContent = '云端 AI 答疑 · 正在思考…';
       streamAsk(q).then(function (st) {
-        if (st === 'ok') return;
+        if (st === 'ok') { cbReset(); return; }
         if (st === 'rate_limited') {
-          addBot('提问太频繁了，请稍等一会儿再试。');
+          addBot('提问太频繁了，请稍等一会儿再试。');   // 429 说明服务活着，不熔断
           return;
         }
-        plainAsk(q);          // 流式不可用 → 一次性接口 → 本地兜底
+        // 网络级不可达：TCP 都连不上，一次性接口必然同样失败，直接跳本地不再重复等
+        if (cloudNetFail) { cbOnFail(); localAnswer(q); return; }
+        plainAsk(q);          // 仅应用级失败（非 SSE / HTTP 错误）才试一次性接口 → 本地兜底
       });
       return;
     }
@@ -658,13 +795,17 @@
   fab.addEventListener('click', function () {
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
-      if (!corpus && !loadFailed) backendSearch(''); // 预热（可选，无副作用）
+      // 仅在云端可用时预热，避免熔断期间还去硬等一个连不上的地址
+      if (CB.state === 'closed' && !corpus && !loadFailed) backendSearch('');
+      cbMaybeProbe();   // 冷却已过则后台探活，后端恢复后无需刷新页面即自动回到云端
       setTimeout(function () { input.focus(); }, 60);
     }
   });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && !panel.hidden) panel.hidden = true;
   });
+
+  cbLoad();   // 恢复熔断状态（仅当前标签页有效，关掉即忘，避免长期误判云端不可用）
 
   addBot('你好，我是<b>站内文档答疑</b>助手。<br>'
        + '优先由<b>云端后端</b>检索本站文章并作答；云端不可用时自动切换为本地检索。<br>'
