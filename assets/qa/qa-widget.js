@@ -23,14 +23,19 @@
   var WEAK_SCORE = 2.0;   // 低于此分视为"没找到明确答案"
   var BM25 = { k1: 1.5, b: 0.75 };
 
-  // 云端后端候选地址（按顺序尝试：https 优先，失败依次回退 http / 直连 IP）
-  // 这样：线上 HTTPS 博客将来接上 HTTPS 后端即用；本地 HTTP 预览可走 http 验证；
-  // 全部失败则降级浏览器本地 BM25。
+  // 云端后端候选地址（按顺序尝试，命中即返回，全部失败则降级浏览器本地 BM25）
+  //
+  // 2026-10-04 定版：域名 hadrwarewatch.icu 因服务器不支持 ICP 备案，
+  // 标准 443 端口会被腾讯云网络层拦截，因此后端 HTTPS 走 **8443 非标准端口**
+  // （nginx 侧 TLS 终结，回源 backend:5000 走 Docker 内网 HTTP）。
+  // 浏览器混合内容规则只校验协议（https）不看端口，故 :8443 可被 HTTPS 博客正常调用。
+  // 后续若完成备案，把首项改回 https://hadrwarewatch.icu 即可，无需再动代码逻辑。
   var USE_BACKEND = true;
   var API_CANDIDATES = [
-    'https://api.hardwarewatch.de5.net',
-    'http://api.hardwarewatch.de5.net',
-    'http://101.42.4.134'
+    'https://hadrwarewatch.icu:8443',   // 主用：已备案前唯一可用通道（非标准端口 TLS）
+    'https://api.hardwarewatch.de5.net', // 备用：de5.net 主人开启托管证书后自动生效
+    'https://hadrwarewatch.icu',        // 备用：备案通过后切回标准 443
+    'http://101.42.4.134'               // 兜底：仅本地 HTTP 预览环境可用（HTTPS 页会被混合内容拦）
   ];
 
   /* ---------------- 中文分词 ---------------- */
