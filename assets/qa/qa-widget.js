@@ -272,6 +272,132 @@
     renderHits(q, data.hits, data.weak);
   }
 
+  /* ---------------- 流式问答（SSE，优先路径） ---------------- */
+  // 同样的模型耗时下，流式把"看到第一个字"的等待从数秒压到百毫秒级。
+  // 任一步失败都会退回一次性接口 /api/kb/search，再失败才降级本地 BM25。
+  var USE_STREAM = true;
+
+  function supportsStream() {
+    return typeof window.ReadableStream !== 'undefined'
+        && typeof window.TextDecoder !== 'undefined'
+        && typeof window.AbortController !== 'undefined';
+  }
+
+  function parseSSEBlock(block) {
+    var name = 'message', data = '';
+    block.split(/\r?\n/).forEach(function (line) {
+      if (line.indexOf('event:') === 0) name = line.slice(6).trim();
+      else if (line.indexOf('data:') === 0) data += line.slice(5).trim();
+    });
+    if (!data) return null;
+    try { return { name: name, data: JSON.parse(data) }; }
+    catch (e) { return null; }
+  }
+
+  // 建一个可增量写入的气泡（流式边收边渲染）
+  function addBotStream() {
+    var row = document.createElement('div');
+    row.className = 'hw-msg bot';
+    var b = document.createElement('div');
+    b.className = 'hw-bubble';
+    row.appendChild(b);
+    body.appendChild(row);
+    scrollEnd();
+    return b;
+  }
+
+  function paintBubble(bubble, text, typing) {
+    bubble.innerHTML = escapeHtml(text).replace(/\n/g, '<br>')
+      + (typing ? '<span class="hw-cursor"></span>' : '');
+    scrollEnd();
+  }
+
+  // 返回 'ok' | 'rate_limited' | 'fail'
+  function streamAsk(q) {
+    function tryOne(i) {
+      if (i >= API_CANDIDATES.length) return Promise.resolve('fail');
+      var base = API_CANDIDATES[i];
+      var url = base + '/api/kb/stream?q=' + encodeURIComponent(q) + '&top_k=' + TOP_K;
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); }, 9000);
+
+      var bubble = null, acc = '', meta = null, doneInfo = null, gotDelta = false, closed = false;
+
+      function finalize() {
+        if (closed) return;
+        closed = true;
+        clearTimeout(timer);
+        if (!gotDelta) return false;          // 没有正文 → 交给降级路径渲染片段
+        paintBubble(bubble, acc, false);
+        if (meta && meta.hits && meta.hits.length) {
+          addRelated(meta.hits.map(function (h) {
+            return { title: h.article, section: h.section, url: h.url };
+          }));
+        }
+        if (doneInfo && doneInfo.cached) sub.textContent = '云端 AI 答疑 · 缓存命中';
+        else if (doneInfo && doneInfo.mode === 'rag') sub.textContent = '云端 AI 答疑 · 已生成答案';
+        else sub.textContent = '云端检索 · 已连接';
+        return true;
+      }
+
+      return fetch(url, {
+        cache: 'no-store',
+        signal: ctrl.signal,
+        headers: { Accept: 'text/event-stream' }
+      }).then(function (r) {
+        if (r.status === 429) {
+          var e = new Error('rate_limited');
+          e.rateLimited = true;
+          throw e;
+        }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        var ct = r.headers.get('Content-Type') || '';
+        if (ct.indexOf('text/event-stream') === -1) throw new Error('not-sse');
+        return r.body.getReader();
+      }).then(function (reader) {
+        var dec = new TextDecoder('utf-8');
+        var buf = '';
+        function pump() {
+          return reader.read().then(function (chunk) {
+            if (chunk.done) {
+              clearTimeout(timer);
+              return finalize() ? 'ok' : 'fail';
+            }
+            buf += dec.decode(chunk.value, { stream: true });
+            var blocks = buf.split('\n\n');
+            buf = blocks.pop();
+            blocks.forEach(function (b) {
+              var ev = parseSSEBlock(b);
+              if (!ev) return;
+              if (ev.name === 'meta') {
+                meta = ev.data;
+                if (meta.hits && meta.hits.length) {
+                  sub.textContent = '云端 AI 答疑 · 参考《' + meta.hits[0].article + '》';
+                }
+              } else if (ev.name === 'delta') {
+                if (!ev.data.text) return;
+                if (!bubble) bubble = addBotStream();
+                acc += ev.data.text;
+                gotDelta = true;
+                paintBubble(bubble, acc, true);
+              } else if (ev.name === 'done') {
+                doneInfo = ev.data;
+              }
+            });
+            return pump();
+          });
+        }
+        return pump();
+      }).catch(function (e) {
+        clearTimeout(timer);
+        if (e && e.rateLimited) return 'rate_limited';
+        console.warn('[qa-widget] 流式不可用(' + base + ')', e && e.message);
+        return tryOne(i + 1);
+      });
+    }
+    return tryOne(0);
+  }
+
   /* ---------------- 样式（复用博客主题变量，自动明暗） ---------------- */
   var css = [
     '.hw-fab{position:fixed;right:24px;bottom:24px;width:52px;height:52px;border-radius:50%;',
@@ -314,6 +440,9 @@
     '.hw-alink a{color:var(--accent,#c9a227);text-decoration:none;font-size:12.5px;border-bottom:1px solid transparent;}',
     '.hw-alink a:hover{border-bottom-color:currentColor;}',
     '.hw-warn{color:var(--accent,#c9a227);font-size:12.5px;margin-bottom:6px;}',
+    '.hw-cursor{display:inline-block;width:6px;height:1em;margin-left:2px;vertical-align:-2px;',
+    ' background:var(--accent,#c9a227);animation:hw-blink 1s steps(2,start) infinite;}',
+    '@keyframes hw-blink{to{visibility:hidden;}}',
     '.hw-tip{margin-top:6px;color:var(--text-muted,#9b9586);font-size:12.5px;}',
     '.hw-rel{margin-top:10px;padding-top:8px;border-top:1px dashed var(--border-light,#34343b);}',
     '.hw-rel-title{font-size:11px;color:var(--text-faint,#65605a);margin-bottom:5px;letter-spacing:.04em;}',
@@ -475,32 +604,52 @@
     addBot(html);
   }
 
-  function handleSend(text) {
-    var q = (text || input.value || '').trim();
-    if (!q) return;
-    input.value = '';
-    addUser(q);
+  // 降级链：云端一次性接口 → 本地 BM25
+  function localAnswer(q) {
+    sub.textContent = '本地离线检索 · 云端暂不可达';
+    ensureCorpus().then(function (ok) {
+      if (!ok) {
+        addBot('资料加载失败。请确认：<br>① 通过本地服务器访问（不要双击打开 HTML）；'
+             + '<br>② <code>assets/qa/corpus.json</code> 存在。');
+        return;
+      }
+      var hits = search(q);
+      var ans = composeAnswer(q, hits);
+      addBot(ans.html);
+      if (!ans.weak) addRelated(ans.related);
+    });
+  }
 
+  function plainAsk(q) {
     backendSearch(q).then(function (data) {
       // 后端返回了有效结果（不管是否有命中片段都走后端渲染）
       if (data && data.hits) {
         renderBackend(q, data);
         return;
       }
-      // 后端不可用 / 报错 → 降级本地 BM25
-      sub.textContent = '本地离线检索 · 云端暂不可达';
-      ensureCorpus().then(function (ok) {
-        if (!ok) {
-          addBot('资料加载失败。请确认：<br>① 通过本地服务器访问（不要双击打开 HTML）；'
-               + '<br>② <code>assets/qa/corpus.json</code> 存在。');
+      localAnswer(q);
+    });
+  }
+
+  function handleSend(text) {
+    var q = (text || input.value || '').trim();
+    if (!q) return;
+    input.value = '';
+    addUser(q);
+
+    if (USE_STREAM && supportsStream()) {
+      sub.textContent = '云端 AI 答疑 · 正在思考…';
+      streamAsk(q).then(function (st) {
+        if (st === 'ok') return;
+        if (st === 'rate_limited') {
+          addBot('提问太频繁了，请稍等一会儿再试。');
           return;
         }
-        var hits = search(q);
-        var ans = composeAnswer(q, hits);
-        addBot(ans.html);
-        if (!ans.weak) addRelated(ans.related);
+        plainAsk(q);          // 流式不可用 → 一次性接口 → 本地兜底
       });
-    });
+      return;
+    }
+    plainAsk(q);
   }
 
   sendBtn.addEventListener('click', function () { handleSend(); });
