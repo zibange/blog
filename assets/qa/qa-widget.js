@@ -795,8 +795,8 @@
   fab.addEventListener('click', function () {
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
-      // 仅在云端可用时预热，避免熔断期间还去硬等一个连不上的地址
-      if (CB.state === 'closed' && !corpus && !loadFailed) backendSearch('');
+      // 原此处有 backendSearch('') 预热，但空查询会被后端判 400，
+      // 继而把 4 个候选全试一遍 —— 每开一次面板白烧 4 次请求，逼近限流阈值，已移除。
       cbMaybeProbe();   // 冷却已过则后台探活，后端恢复后无需刷新页面即自动回到云端
       setTimeout(function () { input.focus(); }, 60);
     }
