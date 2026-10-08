@@ -80,7 +80,14 @@
   function renderMarkdown(md) {
     state.toc = [];
     marked.setOptions({ gfm: true, breaks: false });
-    let html = marked.parse(md);
+    // Protect LaTeX spans from markdown inline parsing (_ and ^ would become em/sup)
+    const mathSpans = [];
+    let src = md.replace(/(?<!\\)(\$\$[\s\S]*?\$\$|\$[^$\n]*?\$)/g, m => {
+      mathSpans.push(m);
+      return `MATHBLOCKTOKEN${mathSpans.length - 1}MATHBLOCKTOKEN`;
+    });
+    let html = marked.parse(src);
+    html = html.replace(/MATHBLOCKTOKEN(\d+)MATHBLOCKTOKEN/g, (m, i) => mathSpans[+i]);
     html = DOMPurify.sanitize(html, { ADD_ATTR: ['target', 'rel'] });
 
     // Post-process DOM: heading ids + TOC, image/link paths, cover dedup
@@ -150,6 +157,19 @@
           (fig || firstImg).remove();
         }
       }
+    }
+
+    // Render LaTeX (KaTeX) if available; degrades to plain text if CDN is unreachable
+    if (typeof renderMathInElement === 'function') {
+      try {
+        renderMathInElement(container, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false }
+          ],
+          throwOnError: false
+        });
+      } catch (e) { /* keep raw text */ }
     }
 
     return container.innerHTML;
