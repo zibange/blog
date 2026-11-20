@@ -1,0 +1,2 @@
+# 依赖目录（KaTeX 公式校验等临时 npm 安装，不入库）
+node_modules/
