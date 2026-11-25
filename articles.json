@@ -37,6 +37,10 @@
     {
       "id": "power",
       "name": "供电与环境"
+    },
+    {
+      "id": "network",
+      "name": "网络与传输"
     }
   ],
   "articles": [
@@ -519,6 +523,16 @@
       "file": "BACnet楼宇控制器产品综述.md",
       "readTime": 24,
       "excerpt": "BACnet 控制器把不同厂商的空调与机电设备抽象成统一的标准对象与服务，实现跨厂商互操作。本文以实例号编码、AHU 点数、MS/TP 令牌环、COV 流量、优先级仲裁、BBMD 广播、报警抑制、BACnet/SC 安全与 BIBB/PICS 覆盖率等 14 个原创算例，给出不被厂商锁死的楼控工程方法。"
+    },
+    {
+      "slug": "industrial-ethernet-switch",
+      "title": "工业以太网交换机产品综述：宽温、冗余电源与环网自愈，撑起现场机柜里断一处不瘫痪的网络骨干",
+      "category": "network",
+      "date": "2026-11-25",
+      "cover": "images/cover.png",
+      "file": "工业以太网交换机产品综述.md",
+      "readTime": 23,
+      "excerpt": "工业以太网交换机用宽温无风扇硬件、冗余电源与环网协议，在断链时快速自愈。本文以交换容量、包转发率、50ms倒换四段分解、业务恢复陷阱、PoE预算、光链路预算、组播治理、PTP精度与MTBF降额等14个原创算例，给出网络骨干的完整工程方法。"
     }
   ]
 }
